@@ -20,7 +20,6 @@ The `Argument` class specifies how a command line argument is to be interpreted.
 ## Roadmap
 As my leisure time permits, I intend to make the following changes:
 * Improve error messages.
-* Allow multiple `shortName`s to be specified in a single argument. E.g., `-ab` is interpreted as `-a -b`.
 * Implement mutually exclusive options.
 * Improve documentation, comments, and code organization.
 * Write comprehensive tests.

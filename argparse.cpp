@@ -152,7 +152,7 @@ void ArgumentParser::addArgument(const Argument& arg)
             {
                 throw std::invalid_argument("ArgumentParser: shortName for an option must begin with '-'");
             }
-            optNames.insert({arg.shortName, arg.name});
+            optNames.insert({arg.shortName.substr(1), arg.name});
         }
     }
 }
@@ -238,6 +238,40 @@ static void verifyValues(const vector<Argument>& arguments, unordered_map<string
     }
 }
 
+// Creates a new argument vector by iterating through args and replacing any short named options
+// with a long name option. If multiple short options are combined behind a single '-', expands
+// these into separate arguments
+static vector<string> expandShortArgs(const vector<string>& args, const unordered_map<string, string>& optNames)
+{
+    vector<string> expandedArgs;
+    bool foundDoubleDash = false;
+    for (const string& str: args)
+    {
+        if (str.length() > 1 && str[0] == '-' && str[1] != '-' && !foundDoubleDash)
+        {
+            // This is a short option. Expand it if necessary
+            for (int i = 1; i < str.length(); i++)
+            {
+                string opt(1, str[i]);
+                if (optNames.count(opt) == 1)
+                {
+                    expandedArgs.push_back(optNames.at(opt));
+                }
+                else
+                {
+                    throw std::invalid_argument("ArgumentParser: Invalid argument: "+str);
+                }
+            }
+        }
+        else
+        {
+            if (str == "--") foundDoubleDash = true;
+            expandedArgs.push_back(str);
+        }
+    }
+    return expandedArgs;
+}
+
 void ArgumentParser::parse(int argc, char** argv)
 {
     vector<string> args(argv, argv + argc);
@@ -246,14 +280,15 @@ void ArgumentParser::parse(int argc, char** argv)
 
 void ArgumentParser::parse(const vector<string>& args)
 {
-    string programName = args[0];
+    vector<string> expArgs = expandShortArgs(args, optNames);
+    string programName = expArgs[0];
     bool readingPositionals = false; // start with optionals, then positionals
     bool foundDashDash = false;
     int posIndex = 0; // index in positionals of next positional argument to find
     int argsIndex = 1;
-    while (argsIndex < args.size())
+    while (argsIndex < expArgs.size())
     {
-        string baseArg = args[argsIndex];
+        string baseArg = expArgs[argsIndex];
         argsIndex++;
 
         if ((baseArg == "-h" || baseArg == "--help") && !foundDashDash)
@@ -274,7 +309,7 @@ void ArgumentParser::parse(const vector<string>& args)
                 readingPositionals = true;
                 foundDashDash = true;
             }
-            else if (optIndex.count(baseArg) == 0 && optNames.count(baseArg) == 0)
+            else if (optIndex.count(baseArg) == 0)
             {
                 throw std::invalid_argument("ArgumentParser: Invalid option: " + baseArg);
             }
@@ -297,7 +332,7 @@ void ArgumentParser::parse(const vector<string>& args)
                     // How many we try to get depends on this baseArg's nargs value.
                     vector<string> optArgs;
                     assert(foundDashDash == false);
-                    argsIndex = getNArgs(args, argsIndex, argSpec.nargs, argSpec.name, optArgs, foundDashDash);
+                    argsIndex = getNArgs(expArgs, argsIndex, argSpec.nargs, argSpec.name, optArgs, foundDashDash);
 
                     // Now that we've gotten the option arguments for this baseArg, add them to the values map
                     values.insert({argSpec.name, optArgs});
@@ -320,11 +355,11 @@ void ArgumentParser::parse(const vector<string>& args)
                 if (argSpec.nargs == NARGS_AT_LEAST_ONE || argSpec.nargs == NARGS_AT_LEAST_ZERO)
                 {
                     // we've already gotten 1, so we need at least 0 more
-                    argsIndex = getNArgs(args, argsIndex, NARGS_AT_LEAST_ZERO, argSpec.name, argArgs, foundDashDash);
+                    argsIndex = getNArgs(expArgs, argsIndex, NARGS_AT_LEAST_ZERO, argSpec.name, argArgs, foundDashDash);
                 }
                 else
                 {
-                    argsIndex = getNArgs(args, argsIndex, argSpec.nargs-1, argSpec.name, argArgs, foundDashDash);
+                    argsIndex = getNArgs(expArgs, argsIndex, argSpec.nargs-1, argSpec.name, argArgs, foundDashDash);
                 }
                 values.insert({argSpec.name, argArgs}); // then add them to the values map
             }
