@@ -15,7 +15,7 @@ namespace argparse
     {
     public:
         std::string name; // determine whether this is positional vs optional based on -- / -
-        std::string shortName; // defaults to empty string
+        std::string shortName; // Must begin with '-'. Ignored for positionals. Defaults to empty string.
         unsigned int nargs; // default to 1
         bool required; // default false for optionals, true for positionals
         std::variant<std::string, std::vector<std::string>> defaultValue;

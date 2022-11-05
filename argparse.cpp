@@ -163,7 +163,7 @@ void ArgumentParser::addArgument(const Argument& arg)
 
 // Gets a span of nargs option arguments from args, starting at index i, putting them in optArgs.
 // Returns index in args directly after the last optArg taken.
-static int getNArgs(const vector<string>& args, int i, int nargs, const string& argName, vector<string>& optArgs)
+static int getNArgs(const vector<string>& args, int i, int nargs, const string& argName, vector<string>& optArgs, bool ignoreFlags)
 {
     if (nargs == 0)
     {
@@ -172,7 +172,7 @@ static int getNArgs(const vector<string>& args, int i, int nargs, const string& 
     if (nargs == NARGS_AT_LEAST_ONE || nargs == NARGS_AT_LEAST_ZERO)
     {
         int numArgs = 0;
-        while (i < args.size() && args[i][0] != '-')
+        while (i < args.size() && (args[i][0] != '-' || ignoreFlags))
         {
             optArgs.push_back(args[i]);
             numArgs++;
@@ -187,7 +187,7 @@ static int getNArgs(const vector<string>& args, int i, int nargs, const string& 
     {
         for (int n = 0; n < nargs; n++)
         {
-            if (i < args.size() && args[i][0] != '-')
+            if (i < args.size() && (args[i][0] != '-' || ignoreFlags))
             {
                 optArgs.push_back(args[i]);
                 i++;
@@ -248,50 +248,60 @@ void ArgumentParser::parse(const vector<string>& args)
 {
     string programName = args[0];
     bool readingPositionals = false; // start with optionals, then positionals
+    bool foundDashDash = false;
     int posIndex = 0; // index in positionals of next positional argument to find
-    int i = 1;
-    while (i < args.size())
+    int argsIndex = 1;
+    while (argsIndex < args.size())
     {
-        string baseArg = args[i];
-        i++;
-        if (baseArg == "-h" || baseArg == "--help")
+        string baseArg = args[argsIndex];
+        argsIndex++;
+
+        if ((baseArg == "-h" || baseArg == "--help") && !foundDashDash)
         {
             printHelp(programName);
             exit(0);
         }
-
-        if (baseArg[0] == '-')
+        else if ((baseArg[0] == '-') && !foundDashDash)
         {
-            // This is an option
             if (readingPositionals)
             {
                 throw std::invalid_argument("ArgumentParser: Optional argument found after positional argument: " + baseArg);
             }
-
-            if (optIndex.count(baseArg) == 0 && optNames.count(baseArg) == 0)
+            else if (baseArg == "--")
+            {
+                // "--" ends the options. Any following arguments are to be interpretted as positionals,
+                // even if they begin with '-'.
+                readingPositionals = true;
+                foundDashDash = true;
+            }
+            else if (optIndex.count(baseArg) == 0 && optNames.count(baseArg) == 0)
             {
                 throw std::invalid_argument("ArgumentParser: Invalid option: " + baseArg);
             }
-            Argument& argSpec = (optIndex.count(baseArg)==1) ? optionals[optIndex[baseArg]] : optionals[optIndex[optNames[baseArg]]];
-
-            if (values.count(argSpec.name) > 0)
-            {
-                throw std::invalid_argument("ArgumentParser: Option found more than once: " + baseArg);
-            }
-
-            if (argSpec.nargs == 0)
-            {
-                values.insert({argSpec.name, vector<string>{"true"}});
-            }
             else
             {
-                // Get the option arguments for this baseArg.
-                // How many we try to get depends on this baseArg's nargs value.
-                vector<string> optArgs;
-                i = getNArgs(args, i, argSpec.nargs, argSpec.name, optArgs);
+                Argument& argSpec = (optIndex.count(baseArg)==1) ? optionals[optIndex[baseArg]] : optionals[optIndex[optNames[baseArg]]];
 
-                // Now that we've gotten the option arguments for this baseArg, add them to the values map
-                values.insert({argSpec.name, optArgs});
+                if (values.count(argSpec.name) > 0)
+                {
+                    throw std::invalid_argument("ArgumentParser: Option found more than once: " + baseArg);
+                }
+
+                if (argSpec.nargs == 0)
+                {
+                    values.insert({argSpec.name, vector<string>{"true"}});
+                }
+                else
+                {
+                    // Get the option arguments for this baseArg.
+                    // How many we try to get depends on this baseArg's nargs value.
+                    vector<string> optArgs;
+                    assert(foundDashDash == false);
+                    argsIndex = getNArgs(args, argsIndex, argSpec.nargs, argSpec.name, optArgs, foundDashDash);
+
+                    // Now that we've gotten the option arguments for this baseArg, add them to the values map
+                    values.insert({argSpec.name, optArgs});
+                }
             }
         }
         else
@@ -310,11 +320,11 @@ void ArgumentParser::parse(const vector<string>& args)
                 if (argSpec.nargs == NARGS_AT_LEAST_ONE || argSpec.nargs == NARGS_AT_LEAST_ZERO)
                 {
                     // we've already gotten 1, so we need at least 0 more
-                    i = getNArgs(args, i, NARGS_AT_LEAST_ZERO, argSpec.name, argArgs);
+                    argsIndex = getNArgs(args, argsIndex, NARGS_AT_LEAST_ZERO, argSpec.name, argArgs, foundDashDash);
                 }
                 else
                 {
-                    i = getNArgs(args, i, argSpec.nargs-1, argSpec.name, argArgs);
+                    argsIndex = getNArgs(args, argsIndex, argSpec.nargs-1, argSpec.name, argArgs, foundDashDash);
                 }
                 values.insert({argSpec.name, argArgs}); // then add them to the values map
             }
