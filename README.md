@@ -20,6 +20,5 @@ The `Argument` class specifies how a command line argument is to be interpreted.
 ## Roadmap
 As my leisure time permits, I intend to make the following changes:
 * Improve error messages.
-* Implement mutually exclusive options.
 * Improve documentation, comments, and code organization.
 * Write comprehensive tests.

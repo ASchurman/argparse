@@ -157,26 +157,58 @@ void ArgumentParser::addArgument(const Argument& arg)
     }
 }
 
+void ArgumentParser::addMutuallyExclusiveArguments(const vector<Argument>& args, bool required)
+{
+    ExclusiveSet set;
+    set.required = required;
+    set.firstIndex = optionals.size();
+    set.lastIndex = optionals.size() + args.size() - 1;
+    exclusiveSets.push_back(set);
+
+    for (int i = 0; i < args.size(); i++)
+    {
+        if (args[i].isPositional())
+        {
+            throw std::invalid_argument("ArgumentParser: Mutually exclusive argument cannot be positional: "+args[i].name);
+        }
+        else if (args[i].required)
+        {
+            throw std::invalid_argument("ArgumentParser: Mutually exclusive option cannot be required: "+args[i].name);
+        }
+
+        exclusiveIndices.insert({args[i].name, exclusiveSets.size()-1});
+        addArgument(args[i]);
+    }
+}
+
 /////////////////////////////////////////////////////////////////////////
 //////////////////// Parsing Command Line Arguments /////////////////////
 /////////////////////////////////////////////////////////////////////////
 
-// Gets a span of nargs option arguments from args, starting at index i, putting them in optArgs.
-// Returns index in args directly after the last optArg taken.
-static int getNArgs(const vector<string>& args, int i, int nargs, const string& argName, vector<string>& optArgs, bool ignoreFlags)
+// Gets a span of nargs option arguments from args, starting at index argsIndex, putting them in outArgs.
+// Returns the index in args directly after the last optArg taken, so that args can continue to be parsed
+// starting from the returned index.
+// If ignoreFlags==true, then don't interpret arguments starting with '-' as optional arguments (i.e.,
+// "--" was previously parsed).
+static int getNArgs(const vector<string>& args,
+                    int argsIndex,
+                    int nargs,
+                    const string& argName,
+                    vector<string>& outArgs,
+                    bool ignoreFlags)
 {
     if (nargs == 0)
     {
-        return i;
+        return argsIndex;
     }
     if (nargs == NARGS_AT_LEAST_ONE || nargs == NARGS_AT_LEAST_ZERO)
     {
         int numArgs = 0;
-        while (i < args.size() && (args[i][0] != '-' || ignoreFlags))
+        while (argsIndex < args.size() && (args[argsIndex][0] != '-' || ignoreFlags))
         {
-            optArgs.push_back(args[i]);
+            outArgs.push_back(args[argsIndex]);
             numArgs++;
-            i++;
+            argsIndex++;
         }
         if (nargs == NARGS_AT_LEAST_ONE && numArgs == 0)
         {
@@ -187,10 +219,10 @@ static int getNArgs(const vector<string>& args, int i, int nargs, const string& 
     {
         for (int n = 0; n < nargs; n++)
         {
-            if (i < args.size() && (args[i][0] != '-' || ignoreFlags))
+            if (argsIndex < args.size() && (args[argsIndex][0] != '-' || ignoreFlags))
             {
-                optArgs.push_back(args[i]);
-                i++;
+                outArgs.push_back(args[argsIndex]);
+                argsIndex++;
             }
             else
             {
@@ -198,14 +230,37 @@ static int getNArgs(const vector<string>& args, int i, int nargs, const string& 
             }
         }
     }
-    return i;
+    return argsIndex;
 }
 
-// Iterate through the arguments. For each of them:
-// - if they're required then make sure that there's a value for them. (throw otherwise)
-// - if they're not required, and they're not in values, then set the default value.
-static void verifyValues(const vector<Argument>& arguments, unordered_map<string, vector<string>>& values)
+// Validate argument values (e.g., required args were found, mutually exclusive args weren't found) and
+// record default values of arguments not found
+void ArgumentParser::validateValues(const vector<Argument>& arguments)
 {
+    // Validate mutually exclusive sets
+    if (!arguments.front().isPositional())
+    {
+        for (const ExclusiveSet& set: exclusiveSets)
+        {
+            bool foundArg = false;
+            for (int i = set.firstIndex; i <= set.lastIndex; i++)
+            {
+                if (values.count(arguments[i].name) > 0)
+                {
+                    if (foundArg)
+                    {
+                        throw std::invalid_argument("ArgumentParser: Found mutually exclusive arguments: "+arguments[i].name);
+                    }
+                    foundArg = true;
+                }
+            }
+            if (set.required && !foundArg)
+            {
+                throw std::invalid_argument("ArgumentParser: Required mutually exclusive argument not found");
+            }
+        }
+    }
+
     for (const Argument& argSpec: arguments)
     {
         if (values.count(argSpec.name) == 0)
@@ -230,10 +285,6 @@ static void verifyValues(const vector<Argument>& arguments, unordered_map<string
                     values.insert({argSpec.name, std::get<vector<string>>(argSpec.defaultValue)});
                 }
             }
-        }
-        else
-        {
-            assert(values.at(argSpec.name).size() > 0);
         }
     }
 }
@@ -280,23 +331,29 @@ void ArgumentParser::parse(int argc, char** argv)
 
 void ArgumentParser::parse(const vector<string>& args)
 {
+    // Expand short args into their long names (including expanding -ab into --aName --bName)
+    if (optNames.count("h") == 0) optNames.insert({"h", "--help"});
     vector<string> expArgs = expandShortArgs(args, optNames);
     string programName = expArgs[0];
-    bool readingPositionals = false; // start with optionals, then positionals
-    bool foundDashDash = false;
-    int posIndex = 0; // index in positionals of next positional argument to find
-    int argsIndex = 1;
+    int argsIndex = 1; // index in expArgs of the next index we're parsing
+
+    // Start with parsing optionals, then positionals.
+    // Becomes true when we find our first positional argument or the end-of-options delimiter
+    bool readingPositionals = false;
+
+    // Have we found the end-of-options delimiter "--"? (This needs to be distinct from
+    // readingPositionals in order not to throw when we see arg starting with '-' after "--".)
+    bool foundEndOfOptions = false;
+
+    // Index in positionals vector of the next positional argument to find.
+    int posIndex = 0;
+
     while (argsIndex < expArgs.size())
     {
         string baseArg = expArgs[argsIndex];
         argsIndex++;
 
-        if ((baseArg == "-h" || baseArg == "--help") && !foundDashDash)
-        {
-            printHelp(programName);
-            exit(0);
-        }
-        else if ((baseArg[0] == '-') && !foundDashDash)
+        if ((baseArg[0] == '-') && !foundEndOfOptions) // Is this an option or the end-of-options delimiter?
         {
             if (readingPositionals)
             {
@@ -307,23 +364,27 @@ void ArgumentParser::parse(const vector<string>& args)
                 // "--" ends the options. Any following arguments are to be interpretted as positionals,
                 // even if they begin with '-'.
                 readingPositionals = true;
-                foundDashDash = true;
+                foundEndOfOptions = true;
+            }
+            else if (baseArg == "--help")
+            {
+                printHelp(programName);
+                exit(0);
             }
             else if (optIndex.count(baseArg) == 0)
             {
                 throw std::invalid_argument("ArgumentParser: Invalid option: " + baseArg);
             }
-            else
+            else // This is an optional argument for which we have an Argument specification!
             {
-                Argument& argSpec = (optIndex.count(baseArg)==1) ? optionals[optIndex[baseArg]] : optionals[optIndex[optNames[baseArg]]];
-
+                Argument& argSpec = optionals[optIndex[baseArg]];
                 if (values.count(argSpec.name) > 0)
                 {
                     throw std::invalid_argument("ArgumentParser: Option found more than once: " + baseArg);
                 }
-
-                if (argSpec.nargs == 0)
+                else if (argSpec.nargs == 0)
                 {
+                    // nargs == 0 means that this is a boolean flag. The user provided it, so its value is true.
                     values.insert({argSpec.name, vector<string>{"true"}});
                 }
                 else
@@ -331,35 +392,38 @@ void ArgumentParser::parse(const vector<string>& args)
                     // Get the option arguments for this baseArg.
                     // How many we try to get depends on this baseArg's nargs value.
                     vector<string> optArgs;
-                    assert(foundDashDash == false);
-                    argsIndex = getNArgs(expArgs, argsIndex, argSpec.nargs, argSpec.name, optArgs, foundDashDash);
+                    assert(foundEndOfOptions == false);
+                    argsIndex = getNArgs(expArgs, argsIndex, argSpec.nargs, argSpec.name, optArgs, foundEndOfOptions);
 
                     // Now that we've gotten the option arguments for this baseArg, add them to the values map
                     values.insert({argSpec.name, optArgs});
                 }
             }
         }
-        else
+        else // This is a positional argument.
         {
-            // This is a positional argument
             if (!readingPositionals) readingPositionals = true;
 
             if (posIndex < positionals.size())
             {
+                // Get the Argument specification
                 Argument& argSpec = positionals[posIndex];
                 posIndex++;
+
                 assert(values.count(argSpec.name) == 0); // if this value has already been written, I've messed up
                 assert(argSpec.nargs != 0); // this should have already been validated before parsing
-                vector<string> argArgs({baseArg}); // interpret baseArg as the first argument arg
-                // get the rest of the argument args
+
+                // Interpret baseArgs as the first argument arg,
+                // then get the rest of the args based on the specification's nargs value
+                vector<string> argArgs({baseArg});
                 if (argSpec.nargs == NARGS_AT_LEAST_ONE || argSpec.nargs == NARGS_AT_LEAST_ZERO)
                 {
                     // we've already gotten 1, so we need at least 0 more
-                    argsIndex = getNArgs(expArgs, argsIndex, NARGS_AT_LEAST_ZERO, argSpec.name, argArgs, foundDashDash);
+                    argsIndex = getNArgs(expArgs, argsIndex, NARGS_AT_LEAST_ZERO, argSpec.name, argArgs, foundEndOfOptions);
                 }
                 else
                 {
-                    argsIndex = getNArgs(expArgs, argsIndex, argSpec.nargs-1, argSpec.name, argArgs, foundDashDash);
+                    argsIndex = getNArgs(expArgs, argsIndex, argSpec.nargs-1, argSpec.name, argArgs, foundEndOfOptions);
                 }
                 values.insert({argSpec.name, argArgs}); // then add them to the values map
             }
@@ -370,12 +434,8 @@ void ArgumentParser::parse(const vector<string>& args)
         }
     }
 
-    // Iterate through the optionals and positionals.
-    // For each of them:
-    //      if they're required then make sure that there's a value for them
-    //      if they're not required, and they're not in values, then set the default value
-    verifyValues(optionals, values);
-    verifyValues(positionals, values);
+    validateValues(optionals);
+    validateValues(positionals);
 }
 
 /////////////////////////////////////////////////////////////////////////
@@ -399,7 +459,9 @@ static int getTerminalWidth()
 
 static const int DESCRIPTION_COL_INDENT = 24;
 
-// Get the description string. Decides how many \t and \n to use based on the length of usage.
+// Get the description string for an argument by text-wrapping the provided
+// description. Decides to start on the current line or a new line based on
+// whether the preceding usage string was longer than the description column indent.
 static string getDescription(bool longUsage, const string& description)
 {
     if (description.empty())
@@ -452,6 +514,7 @@ static string getDescription(bool longUsage, const string& description)
     return s;
 }
 
+// Gets the the metavar part of the usage string, based on the argument's nargs value.
 static string getMetavarUsage(const Argument& arg)
 {
     string s = "";
@@ -473,10 +536,13 @@ static string getMetavarUsage(const Argument& arg)
     return s;
 }
 
-static string getArgumentUsage(const Argument& arg)
+// Gets the usage string for a single argument.
+string ArgumentParser::getArgumentUsage(const Argument& arg)
 {
-    string s = arg.isPositional() ? "" : " ";
-    if (!arg.required && !(arg.isPositional() && arg.nargs == NARGS_AT_LEAST_ZERO))
+    string s = "";
+    if (!arg.required &&
+        !(arg.isPositional() && arg.nargs == NARGS_AT_LEAST_ZERO) &&
+        exclusiveIndices.count(arg.name) == 0)
     {
         s += "[";
     }
@@ -492,7 +558,9 @@ static string getArgumentUsage(const Argument& arg)
         }
     }
     s += getMetavarUsage(arg);
-    if (!arg.required && !(arg.isPositional() && arg.nargs == NARGS_AT_LEAST_ZERO))
+    if (!arg.required &&
+        !(arg.isPositional() && arg.nargs == NARGS_AT_LEAST_ZERO) &&
+        exclusiveIndices.count(arg.name) == 0)
     {
         s += "]";
     }
@@ -501,12 +569,57 @@ static string getArgumentUsage(const Argument& arg)
 
 void ArgumentParser::printUsage(const string& programName)
 {
-    cout << "usage: " << programName << " [-h]";
+    cout << "usage: " << programName << " [-h] ";
 
     // First print optionals
-    for (Argument& arg: optionals)
+    bool inMutuallyExclusiveGroup = false;
+    for (int i = 0; i < optionals.size(); i++)
     {
-        cout << getArgumentUsage(arg);
+        if (!inMutuallyExclusiveGroup && exclusiveIndices.count(optionals[i].name) > 0)
+        {
+            // This is the first arg in a mutually exclusive group
+            inMutuallyExclusiveGroup = true;
+            if (exclusiveSets[exclusiveIndices[optionals[i].name]].required)
+            {
+                cout << "(";
+            }
+            else
+            {
+                cout << "[";
+            }
+        }
+        else if (inMutuallyExclusiveGroup && exclusiveIndices.count(optionals[i].name) > 0)
+        {
+            // This is in a mutually exclusive group, and it's not the first one
+            cout << "| ";
+        }
+        else if (inMutuallyExclusiveGroup && exclusiveIndices.count(optionals[i].name) == 0)
+        {
+            // Previous arg was the last in a mutually exclusive group
+            inMutuallyExclusiveGroup = false;
+            if (exclusiveSets[exclusiveIndices[optionals[i-1].name]].required)
+            {
+                cout << ")";
+            }
+            else
+            {
+                cout << "]";
+            }
+        }
+        cout << getArgumentUsage(optionals[i]);
+        if (i+1 < optionals.size()) cout << " ";
+    }
+    // Check if the last of the optionals was a mutually exclusive group
+    if (exclusiveIndices.count(optionals.back().name) > 0)
+    {
+        if (exclusiveSets[exclusiveIndices[optionals.back().name]].required)
+        {
+            cout << ")";
+        }
+        else
+        {
+            cout << "]";
+        }
     }
 
     // Then print positionals
