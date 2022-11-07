@@ -26,7 +26,7 @@ Argument::Argument(const string& name)
 {
     if (name.empty())
     {
-        throw std::invalid_argument("ArgumentParser::Argument: name cannot be empty");
+        throw std::invalid_argument("Argument: name cannot be empty");
     }
     this->name = name;
     this->shortName = "";
@@ -52,7 +52,7 @@ bool Argument::isPositional() const
 {
     if (name.empty())
     {
-        throw std::invalid_argument("ArgumentParser::Argument: name cannot be empty");
+        throw std::invalid_argument("Argument: name cannot be empty");
     }
     return name.substr(0, 1) != "-";
 }
@@ -88,7 +88,7 @@ static void validateArgument(const Argument& arg)
     if (!arg.shortName.empty() &&
         (arg.shortName.length() != 2 || arg.shortName[0] != '-'))
     {
-        throw std::invalid_argument("ArgumentParser: shortName must be '-' followed by a single letter: "+arg.shortName);
+        throw std::invalid_argument("ArgumentParser: shortName must be '-' followed by a single letter insted of: "+arg.shortName);
     }
 
     // Validate nargs
@@ -185,144 +185,6 @@ void ArgumentParser::addMutuallyExclusiveArguments(const vector<Argument>& args,
 //////////////////// Parsing Command Line Arguments /////////////////////
 /////////////////////////////////////////////////////////////////////////
 
-// Gets a span of nargs option arguments from args, starting at index argsIndex, putting them in outArgs.
-// Returns the index in args directly after the last optArg taken, so that args can continue to be parsed
-// starting from the returned index.
-// If ignoreFlags==true, then don't interpret arguments starting with '-' as optional arguments (i.e.,
-// "--" was previously parsed).
-static int getNArgs(const vector<string>& args,
-                    int argsIndex,
-                    int nargs,
-                    const string& argName,
-                    vector<string>& outArgs,
-                    bool ignoreFlags)
-{
-    if (nargs == 0)
-    {
-        return argsIndex;
-    }
-    if (nargs == NARGS_AT_LEAST_ONE || nargs == NARGS_AT_LEAST_ZERO)
-    {
-        int numArgs = 0;
-        while (argsIndex < args.size() && (args[argsIndex][0] != '-' || ignoreFlags))
-        {
-            outArgs.push_back(args[argsIndex]);
-            numArgs++;
-            argsIndex++;
-        }
-        if (nargs == NARGS_AT_LEAST_ONE && numArgs == 0)
-        {
-            throw std::invalid_argument("ArgumentParser: Not enough arguments provided for option: "+argName);
-        }
-    }
-    else
-    {
-        for (int n = 0; n < nargs; n++)
-        {
-            if (argsIndex < args.size() && (args[argsIndex][0] != '-' || ignoreFlags))
-            {
-                outArgs.push_back(args[argsIndex]);
-                argsIndex++;
-            }
-            else
-            {
-                throw std::invalid_argument("ArgumentParser: Not enough arguments provided for option: " + argName);
-            }
-        }
-    }
-    return argsIndex;
-}
-
-// Validate argument values (e.g., required args were found, mutually exclusive args weren't found) and
-// record default values of arguments not found
-void ArgumentParser::validateValues(const vector<Argument>& arguments)
-{
-    // Validate mutually exclusive sets
-    if (!arguments.front().isPositional())
-    {
-        for (const ExclusiveSet& set: exclusiveSets)
-        {
-            bool foundArg = false;
-            for (int i = set.firstIndex; i <= set.lastIndex; i++)
-            {
-                if (values.count(arguments[i].name) > 0)
-                {
-                    if (foundArg)
-                    {
-                        throw std::invalid_argument("ArgumentParser: Found mutually exclusive arguments: "+arguments[i].name);
-                    }
-                    foundArg = true;
-                }
-            }
-            if (set.required && !foundArg)
-            {
-                throw std::invalid_argument("ArgumentParser: Required mutually exclusive argument not found");
-            }
-        }
-    }
-
-    for (const Argument& argSpec: arguments)
-    {
-        if (values.count(argSpec.name) == 0)
-        {
-            if (argSpec.required)
-            {
-                throw std::invalid_argument("ArgumentParser: required argument not found: "+argSpec.name);
-            }
-            else
-            {
-                // Argument isn't required, and it wasn't found when parsing.
-                // Add its default value to the values map.
-                if (std::holds_alternative<string>(argSpec.defaultValue))
-                {
-                    // The default value is a singleton, but the values map contains vectors.
-                    // Make a vector of the appropriate type with the single value.
-                    values.insert({argSpec.name, {std::get<string>(argSpec.defaultValue)}});
-                }
-                else
-                {
-                    assert(std::holds_alternative<vector<string>>(argSpec.defaultValue));
-                    values.insert({argSpec.name, std::get<vector<string>>(argSpec.defaultValue)});
-                }
-            }
-        }
-    }
-}
-
-// Creates a new argument vector by iterating through args and replacing any short named options
-// with a long name option. If multiple short options are combined behind a single '-', expands
-// these into separate arguments
-static vector<string> expandShortArgs(const vector<string>& args, const unordered_map<string, string>& optNames)
-{
-    vector<string> expandedArgs;
-    bool foundDoubleDash = false;
-    for (const string& str: args)
-    {
-        if (str.length() > 1 && str[0] == '-' && str[1] != '-' && !foundDoubleDash)
-        {
-            // This is a short option. Expand it if necessary
-            for (int i = 1; i < str.length(); i++)
-            {
-                string opt(1, str[i]);
-                if (optNames.count(opt) == 1)
-                {
-                    expandedArgs.push_back(optNames.at(opt));
-                }
-                else
-                {
-                    throw std::invalid_argument("ArgumentParser: Invalid argument: "+str);
-                }
-            }
-        }
-        else
-        {
-            if (str == "--") foundDoubleDash = true;
-            expandedArgs.push_back(str);
-        }
-    }
-    return expandedArgs;
-}
-
 void ArgumentParser::parse(int argc, char** argv)
 {
     vector<string> args(argv, argv + argc);
@@ -333,8 +195,8 @@ void ArgumentParser::parse(const vector<string>& args)
 {
     // Expand short args into their long names (including expanding -ab into --aName --bName)
     if (optNames.count("h") == 0) optNames.insert({"h", "--help"});
-    vector<string> expArgs = expandShortArgs(args, optNames);
-    string programName = expArgs[0];
+    vector<string> expArgs = expandShortArgs(args);
+    programName = expArgs[0];
     int argsIndex = 1; // index in expArgs of the next index we're parsing
 
     // Start with parsing optionals, then positionals.
@@ -357,6 +219,7 @@ void ArgumentParser::parse(const vector<string>& args)
         {
             if (readingPositionals)
             {
+                printUsage();
                 throw std::invalid_argument("ArgumentParser: Optional argument found after positional argument: " + baseArg);
             }
             else if (baseArg == "--")
@@ -368,11 +231,12 @@ void ArgumentParser::parse(const vector<string>& args)
             }
             else if (baseArg == "--help")
             {
-                printHelp(programName);
+                printHelp();
                 exit(0);
             }
             else if (optIndex.count(baseArg) == 0)
             {
+                printUsage();
                 throw std::invalid_argument("ArgumentParser: Invalid option: " + baseArg);
             }
             else // This is an optional argument for which we have an Argument specification!
@@ -380,6 +244,7 @@ void ArgumentParser::parse(const vector<string>& args)
                 Argument& argSpec = optionals[optIndex[baseArg]];
                 if (values.count(argSpec.name) > 0)
                 {
+                    printUsage();
                     throw std::invalid_argument("ArgumentParser: Option found more than once: " + baseArg);
                 }
                 else if (argSpec.nargs == 0)
@@ -429,13 +294,157 @@ void ArgumentParser::parse(const vector<string>& args)
             }
             else
             {
+                printUsage();
                 throw std::invalid_argument("ArgumentParser: Too many positional arguments.");
             }
         }
     }
-
     validateValues(optionals);
     validateValues(positionals);
+}
+
+// Creates a new argument vector by iterating through args and replacing any short named options
+// with a long name option. If multiple short options are combined behind a single '-', expands
+// these into separate arguments
+vector<string> ArgumentParser::expandShortArgs(const vector<string>& args)
+{
+    vector<string> expandedArgs;
+    bool foundDoubleDash = false;
+    for (const string& str: args)
+    {
+        if (str.length() > 1 && str[0] == '-' && str[1] != '-' && !foundDoubleDash)
+        {
+            // This is a short option. Expand it if necessary
+            for (int i = 1; i < str.length(); i++)
+            {
+                string opt(1, str[i]);
+                if (optNames.count(opt) == 1)
+                {
+                    expandedArgs.push_back(optNames.at(opt));
+                }
+                else
+                {
+                    printUsage();
+                    throw std::invalid_argument("ArgumentParser: Invalid argument: "+str);
+                }
+            }
+        }
+        else
+        {
+            if (str == "--") foundDoubleDash = true;
+            expandedArgs.push_back(str);
+        }
+    }
+    return expandedArgs;
+}
+
+// Gets a span of nargs option arguments from args, starting at index argsIndex, putting them in outArgs.
+// Returns the index in args directly after the last optArg taken, so that args can continue to be parsed
+// starting from the returned index.
+// If ignoreFlags==true, then don't interpret arguments starting with '-' as optional arguments (i.e.,
+// "--" was previously parsed).
+int ArgumentParser::getNArgs(const vector<string>& args,
+                             int argsIndex,
+                             int nargs,
+                             const string& argName,
+                             vector<string>& outArgs,
+                             bool ignoreFlags)
+{
+    if (nargs == 0)
+    {
+        return argsIndex;
+    }
+    if (nargs == NARGS_AT_LEAST_ONE || nargs == NARGS_AT_LEAST_ZERO)
+    {
+        int numArgs = 0;
+        while (argsIndex < args.size() && (args[argsIndex][0] != '-' || ignoreFlags))
+        {
+            outArgs.push_back(args[argsIndex]);
+            numArgs++;
+            argsIndex++;
+        }
+        if (nargs == NARGS_AT_LEAST_ONE && numArgs == 0)
+        {
+            printUsage();
+            throw std::invalid_argument("ArgumentParser: Not enough arguments provided for option: "+argName);
+        }
+    }
+    else
+    {
+        for (int n = 0; n < nargs; n++)
+        {
+            if (argsIndex < args.size() && (args[argsIndex][0] != '-' || ignoreFlags))
+            {
+                outArgs.push_back(args[argsIndex]);
+                argsIndex++;
+            }
+            else
+            {
+                printUsage();
+                throw std::invalid_argument("ArgumentParser: Not enough arguments provided for option: " + argName);
+            }
+        }
+    }
+    return argsIndex;
+}
+
+// Validate argument values (e.g., required args were found, mutually exclusive args weren't found) and
+// record default values of arguments not found
+void ArgumentParser::validateValues(const vector<Argument>& arguments)
+{
+    // Validate mutually exclusive sets
+    if (!arguments.front().isPositional())
+    {
+        for (const ExclusiveSet& set: exclusiveSets)
+        {
+            bool foundArg = false;
+            for (int i = set.firstIndex; i <= set.lastIndex; i++)
+            {
+                if (values.count(arguments[i].name) > 0)
+                {
+                    if (foundArg)
+                    {
+                        printUsage();
+                        throw std::invalid_argument("ArgumentParser: Found mutually exclusive arguments: "+arguments[i].name);
+                    }
+                    foundArg = true;
+                }
+            }
+            if (set.required && !foundArg)
+            {
+                printUsage();
+                throw std::invalid_argument("ArgumentParser: Required mutually exclusive argument not found");
+            }
+        }
+    }
+
+    for (const Argument& argSpec: arguments)
+    {
+        if (values.count(argSpec.name) == 0)
+        {
+            if (argSpec.required)
+            {
+                printUsage();
+                throw std::invalid_argument("ArgumentParser: required argument not found: "+argSpec.name);
+            }
+            else
+            {
+                // Argument isn't required, and it wasn't found when parsing.
+                // Add its default value to the values map.
+                if (std::holds_alternative<string>(argSpec.defaultValue))
+                {
+                    // The default value is a singleton, but the values map contains vectors.
+                    // Make a vector of the appropriate type with the single value.
+                    values.insert({argSpec.name, {std::get<string>(argSpec.defaultValue)}});
+                }
+                else
+                {
+                    assert(std::holds_alternative<vector<string>>(argSpec.defaultValue));
+                    values.insert({argSpec.name, std::get<vector<string>>(argSpec.defaultValue)});
+                }
+            }
+        }
+    }
 }
 
 /////////////////////////////////////////////////////////////////////////
@@ -567,7 +576,7 @@ string ArgumentParser::getArgumentUsage(const Argument& arg)
     return s;
 }
 
-void ArgumentParser::printUsage(const string& programName)
+void ArgumentParser::printUsage()
 {
     cout << "usage: " << programName << " [-h] ";
 
@@ -630,9 +639,9 @@ void ArgumentParser::printUsage(const string& programName)
     cout << "\n";
 }
 
-void ArgumentParser::printHelp(const string& programName)
+void ArgumentParser::printHelp()
 {
-    printUsage(programName);
+    printUsage();
 
     if (positionals.size() > 0)
     {

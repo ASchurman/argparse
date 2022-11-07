@@ -79,10 +79,9 @@ namespace argparse
             }
         }
 
-        void printUsage(const std::string& programName);
-        void printHelp(const std::string& programName);
-
     private:
+        std::string programName;
+
         // The optional arguments, in the order given to us by addArgument
         std::vector<Argument> optionals;
 
@@ -115,6 +114,16 @@ namespace argparse
 
         void validateValues(const std::vector<Argument>& arguments);
         std::string getArgumentUsage(const Argument& arg);
+        std::vector<std::string> expandShortArgs(const std::vector<std::string>& args);
+        int getNArgs(const std::vector<std::string>& args,
+                     int argsIndex,
+                     int nargs,
+                     const std::string& argName,
+                     std::vector<std::string>& outArgs,
+                     bool ignoreFlags);
+        
+        void printUsage();
+        void printHelp();
 
         template <typename T>
         static T convertFromString(const std::string& str, const std::string& argName)
