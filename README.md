@@ -16,6 +16,7 @@ The `Argument` class specifies how a command line argument is to be interpreted.
 * `defaultValue`. The default value for if this argument doesn't appear. This can be a single string (for nargs=1) or a vector of strings (for nargs>1). If `nargs` is 0, then `defaultValue` becomes `"false"`.
 * `help`. The help description printed if the user specifies the `--help` or `-h` option.
 * `metavar`. The name that represents this argument's sub-arguments in the help message. (Defaults to `name` for positionals and all-caps `name` for options.)
+* `choices`. If specified, the value(s) for this argument must be among the elements of the choices vector.
 
 ## Roadmap
 As my leisure time permits, I intend to make the following changes:

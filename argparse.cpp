@@ -121,11 +121,32 @@ static void validateArgument(const Argument& arg)
                 {
                     throw std::invalid_argument("ArgumentParser: defaultValue and nargs aren't the same size for argument: " + arg.name);
                 }
+
+                // Validate that the defaultValue vector has only values from choices, if choices was set
+                if (!arg.choices.empty())
+                {
+                    for (const string& s: v)
+                    {
+                        if (std::find(arg.choices.begin(), arg.choices.end(), s) == arg.choices.end())
+                        {
+                            throw std::invalid_argument("ArgumentParser: defaultValue contains invalid value "+s+" for argument: "+arg.name);
+                        }
+                    }
+                }
             }
         }
         else if (!std::holds_alternative<string>(arg.defaultValue))
         {
             throw std::invalid_argument("ArgumentParser: nargs<=1 requires defaultValue to be a single value for argument:" + arg.name);
+        }
+        else if (!arg.choices.empty())
+        {
+            // Validate that the single string defaultValue is in choices
+            string s = std::get<string>(arg.defaultValue);
+            if (std::find(arg.choices.begin(), arg.choices.end(), s) == arg.choices.end())
+            {
+                throw std::invalid_argument("ArgumentParser: defaultValue is invalid value "+s+" for argument: "+arg.name);
+            }
         }
     }
 }
@@ -441,6 +462,17 @@ void ArgumentParser::validateValues(const vector<Argument>& arguments)
                 {
                     assert(std::holds_alternative<vector<string>>(argSpec.defaultValue));
                     values.insert({argSpec.name, std::get<vector<string>>(argSpec.defaultValue)});
+                }
+            }
+        }
+        else if (!argSpec.choices.empty())
+        {
+            for (const string& val: values[argSpec.name])
+            {
+                if (std::find(argSpec.choices.begin(), argSpec.choices.end(), val) == argSpec.choices.end())
+                {
+                    printUsage();
+                    throw std::invalid_argument("ArgumentParser: Invalid value for argument "+argSpec.name+" : "+val);
                 }
             }
         }

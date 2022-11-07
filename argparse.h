@@ -21,6 +21,7 @@ namespace argparse
         std::variant<std::string, std::vector<std::string>> defaultValue;
         std::string help; // defaults to empty string
         std::string metavar; // defaults to NAME for optionals, name for positionals
+        std::vector<std::string> choices; // Valid values for this option. If empty, all values are valid.
         
         Argument(const std::string& name);
         bool isPositional() const;
